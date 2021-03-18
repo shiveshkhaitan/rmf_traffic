@@ -636,27 +636,23 @@ bool check_overlap(
   };
 
   auto convert = [](Eigen::Vector3d p) -> fcl::Transform3f
-    {
-      fcl::Matrix3f R;
-      R.setEulerZYX(0.0, 0.0, p[2]);
-      return fcl::Transform3f(R, fcl::Vec3f(p[0], p[1], 0.0));
-    };
-
-  for (const auto& pair : pairs)
   {
-    fcl::CollisionObject obj_a(
-      geometry::FinalConvexShape::Implementation::get_collision(*pair[0]),
-      convert(spline_a.compute_position(time)));
+    fcl::Matrix3f R;
+    R.setEulerZYX(0.0, 0.0, p[2]);
+    return fcl::Transform3f(R, fcl::Vec3f(p[0], p[1], 0.0));
+  };
+  auto tx_a = convert(spline_a.compute_position(time));
+  auto tx_b = convert(spline_b.compute_position(time));
+  
+  bool collide = check_footprint_vicinity_collision(
+    profile_a.footprint, tx_a, profile_b.vicinity, tx_b);
+  if (collide)
+    return true;
 
-    fcl::CollisionObject obj_b(
-      geometry::FinalConvexShape::Implementation::get_collision(*pair[1]),
-      convert(spline_b.compute_position(time)));
-
-    if (fcl::collide(&obj_a, &obj_b, request, result) > 0)
-      return true;
-  }
-#endif
-
+  collide = check_footprint_vicinity_collision(
+    profile_b.footprint, tx_b, profile_a.vicinity, tx_a);
+  if (collide)
+    return true;
   return false;
 #endif
 }
