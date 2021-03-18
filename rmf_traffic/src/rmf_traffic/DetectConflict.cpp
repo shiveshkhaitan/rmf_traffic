@@ -296,27 +296,15 @@ BoundingProfile get_bounding_profile(
 
   const auto& footprint = profile.footprint;
   
-  double max_footprint_length = footprint ? 
-    footprint->get_characteristic_length() : 0.0;
-  for (uint i=0; i<profile.extra_footprint_count; ++i)
-  {
-    auto& extra_shape = profile.extra_footprints[i];
-
-    double dist = extra_shape.offset.norm() + extra_shape.shape->get_characteristic_length();
-    if (max_footprint_length < dist)
-      max_footprint_length = dist;
-  }
-  auto f_box = footprint ?
-    adjust_bounding_box(base_box, max_footprint_length) :
+  double footprint_length = profile.footprint_characteristic_length;
+  auto f_box = footprint.size() ?
+    adjust_bounding_box(base_box, footprint_length) :
     void_box();
 
-  // std::cout << "footprint_box\n";
-  // std::cout << f_box.min << std::endl;
-  // std::cout << f_box.max << std::endl;
-
   const auto& vicinity = profile.vicinity;
-  auto v_box = vicinity ?
-    adjust_bounding_box(base_box, vicinity->get_characteristic_length()) :
+  double vicinity_length = profile.vicinity_characteristic_length;
+  auto v_box = vicinity.size() ?
+    adjust_bounding_box(base_box, vicinity_length) :
     void_box();
 
   if (v_box.min[0] > f_box.min[0] && v_box.max[0] < f_box.max[0] && 
@@ -325,9 +313,6 @@ BoundingProfile get_bounding_profile(
     v_box.min = f_box.min;
     v_box.max = f_box.max;
   }
-  // std::cout << "vicinity_box\n";
-  // std::cout << v_box.min << std::endl;
-  // std::cout << v_box.max << std::endl;
 
   return BoundingProfile{f_box, v_box};
 }
@@ -403,56 +388,84 @@ FclContinuousCollisionRequest make_fcl_request()
 
 //==============================================================================
 rmf_utils::optional<double> check_collision(
-  const Profile::Implementation& profile_footprint_a,
+  const geometry::ConstFinalConvexShapeGroup& shapes_a,
   const std::shared_ptr<FclSplineMotion>& motion_a,
-  const geometry::FinalConvexShape& shape_b,
+  const geometry::ConstFinalConvexShapeGroup& shapes_b,
   const std::shared_ptr<FclSplineMotion>& motion_b,
   const FclContinuousCollisionRequest& request)
 {
   motion_a->integrate(0.0);
   motion_b->integrate(0.0);
 
-  if (profile_footprint_a.extra_footprint_count == 0)
+  bool has_offset = false;
+  for (auto shape : shapes_a)
   {
-    const auto obj_a = FclContinuousCollisionObject(
-      geometry::FinalConvexShape::Implementation::get_collision(*profile_footprint_a.footprint),
-      motion_a);
-    
-    const auto obj_b = FclContinuousCollisionObject(
-      geometry::FinalConvexShape::Implementation::get_collision(shape_b),
-      motion_b);
+    if (shape->has_offset())
+    {
+      has_offset = true;
+      break;
+    }
+  }
+  for (auto shape : shapes_b)
+  {
+    if (shape->has_offset())
+    {
+      has_offset = true;
+      break;
+    }
+  }
+  
+  if (!has_offset)
+  {
+    double toi = 0.0;
+    for (auto shape_a : shapes_a)
+    {
+      const auto obj_a = FclContinuousCollisionObject(
+        geometry::FinalConvexShape::Implementation::get_collision(*shape_a),
+        motion_a);
+      
+      for (auto shape_b : shapes_b)
+      {
+        const auto obj_b = FclContinuousCollisionObject(
+          geometry::FinalConvexShape::Implementation::get_collision(*shape_b),
+          motion_b);
 
-    FclContinuousCollisionResult result;
-    fcl::collide(&obj_a, &obj_b, request, result);
+        FclContinuousCollisionResult result;
+        fcl::collide(&obj_a, &obj_b, request, result);
 
-    if (result.is_collide)
-      return result.time_of_contact;
+        if (result.is_collide)
+          return result.time_of_contact;
+      }
+    }
   }
   else
   {
     std::vector<ModelSpaceShape> a_shapes;
     std::vector<ModelSpaceShape> b_shapes;
-    
-    FclTransform3 identity;
-    identity.setIdentity();
 
-    a_shapes.emplace_back(identity, profile_footprint_a.footprint->get_characteristic_length());
-
-    for (uint i=0; i<profile_footprint_a.extra_footprint_count; ++i)  
+    auto toModelSpaceShape = [](const geometry::ConstFinalConvexShapeGroup& shapes,
+      std::vector<ModelSpaceShape>& out)
     {
-      auto& extra_shape = profile_footprint_a.extra_footprints[i];
-
       FclTransform3 tx;
       tx.setIdentity();
+
+      for (auto shape : shapes)
+      {
+        FclTransform3 tx;
+        tx.setIdentity();
+        
 #ifdef RMF_TRAFFIC__USING_FCL_0_6
-      tx.pretranslate(extra_shape.offset);
+        tx.pretranslate(shape->get_offset());
 #else
-      fcl::Vec3f p(extra_shape.offset.x(), extra_shape.offset.y(), extra_shape.offset.z());
-      tx.setTranslation(p);
+        fcl::Vec3f p(shape->get_offset().x(), shape->get_offset().y(), 0.0f);
+        tx.setTranslation(p);
 #endif
-      a_shapes.emplace_back(tx, extra_shape.shape->get_characteristic_length());
-    }
-    b_shapes.emplace_back(identity, shape_b.get_characteristic_length());
+        out.emplace_back(tx, shape->get_characteristic_length());
+      }
+    };
+    
+    toModelSpaceShape(shapes_a, a_shapes);
+    toModelSpaceShape(shapes_b, b_shapes);
 
     double impact_time = 0.0;
     double tolerance = 0.1;
@@ -473,7 +486,7 @@ rmf_utils::optional<double> check_collision(
 Profile::Implementation convert_profile(const Profile& profile)
 {
   Profile::Implementation output = Profile::Implementation::get(profile);
-  if (!output.vicinity)
+  if (output.vicinity.empty())
     output.vicinity = output.footprint;
 
   return output;
@@ -579,69 +592,68 @@ bool check_overlap(
     return true;
   return false;
 #else
+  
+  auto check_footprint_vicinity_collision = [](
+    const geometry::ConstFinalConvexShapeGroup& footprint,
+    fcl::Transform3f tx_footprint,
+    const geometry::ConstFinalConvexShapeGroup& vicinity,
+    fcl::Transform3f tx_vicinity) -> bool
+  { 
+    FclCollisionRequest request;
+    FclCollisionResult result;
+
+    for (auto footprint_shape : footprint)
+    {
+#ifdef RMF_TRAFFIC__USING_FCL_0_6
+      auto tx_footprint_with_offset = tx_footprint * extra_shape.offset;
+#else
+      fcl::Vec3f p(footprint_shape->get_offset().x(), footprint_shape->get_offset().y(), 0.0);
+      FclTransform3 t;
+      t.setTranslation(p);
+      auto tx_footprint_with_offset = tx_footprint * t;
+#endif
+      FclCollisionObject obj_footprint(
+        geometry::FinalConvexShape::Implementation::get_collision(*footprint_shape),
+        tx_footprint_with_offset);
+
+      for (auto vicinity_shape : vicinity)
+      {
+#ifdef RMF_TRAFFIC__USING_FCL_0_6
+        auto tx_vicinity_with_offset = tx_footprint * extra_shape.offset;
+#else
+        fcl::Vec3f p(vicinity_shape->get_offset().x(), vicinity_shape->get_offset().y(), 0.0);
+        FclTransform3 t;
+        t.setTranslation(p);
+        auto tx_vicinity_with_offset = tx_vicinity * t;
+#endif
+        FclCollisionObject obj_vicinity(
+          geometry::FinalConvexShape::Implementation::get_collision(*vicinity_shape),
+          tx_vicinity_with_offset);
+
+        if (fcl::collide(&obj_footprint, &obj_vicinity, request, result) > 0)
+          return true;
+      }
+    }
+    
+    return false;
+  };
+
   auto convert = [](Eigen::Vector3d p) -> fcl::Transform3f
   {
     fcl::Matrix3f R;
     R.setEulerZYX(0.0, 0.0, p[2]);
     return fcl::Transform3f(R, fcl::Vec3f(p[0], p[1], 0.0));
   };
-  auto check_footprint_vicinity_collision = [](
-    const Profile::Implementation& profile_footprint,
-    fcl::Transform3f tx_footprint,
-    const FclCollisionObject& obj_vicinity) -> bool
-  { 
-    FclCollisionRequest request;
-    FclCollisionResult result;
-
-    // test with main footprint
-    FclCollisionObject obj_footprint(
-      geometry::FinalConvexShape::Implementation::get_collision(*profile_footprint.footprint),
-      tx_footprint);
-
-    if (fcl::collide(&obj_footprint, &obj_vicinity, request, result) > 0)
-      return true;
-
-    auto tx = obj_footprint.getTransform();
-    // go through the extra footprint shapes and do collision checks
-    for (uint i=0; i<profile_footprint.extra_footprint_count; ++i)
-    {
-      auto& extra_shape = profile_footprint.extra_footprints[i];
-#ifdef RMF_TRAFFIC__USING_FCL_0_6
-      auto tx_shape = tx * extra_shape.offset;
-#else
-      fcl::Vec3f p(extra_shape.offset.x(), extra_shape.offset.y(), extra_shape.offset.z());
-      FclTransform3 t;
-      t.setTranslation(p);
-      auto tx_shape = tx * t;
-      auto shape_rot = tx.getRotation();
-#endif
-      FclCollisionObject obj_extra(
-        geometry::FinalConvexShape::Implementation::get_collision(*extra_shape.shape),
-        tx_shape);
-
-      if (fcl::collide(&obj_extra, &obj_vicinity, request, result) > 0)
-        return true;
-    }
-    return false;
-  };
-
   auto tx_a = convert(spline_a.compute_position(time));
-  FclCollisionObject obj_a_vicinity(
-    geometry::FinalConvexShape::Implementation::get_collision(*profile_a.vicinity),
-    tx_a);
-
   auto tx_b = convert(spline_b.compute_position(time));
-  FclCollisionObject obj_b_vicinity(
-    geometry::FinalConvexShape::Implementation::get_collision(*profile_b.vicinity),
-    tx_b);
-
+  
   bool collide = check_footprint_vicinity_collision(
-    profile_a, tx_a, obj_b_vicinity);
+    profile_a.footprint, tx_a, profile_b.vicinity, tx_b);
   if (collide)
     return true;
 
   collide = check_footprint_vicinity_collision(
-    profile_b, tx_b, obj_a_vicinity);
+    profile_b.footprint, tx_b, profile_a.vicinity, tx_a);
   if (collide)
     return true;
   return false;
@@ -692,8 +704,6 @@ rmf_utils::optional<rmf_traffic::Time> detect_invasion(
   bool test_complement =
     (profile_a.vicinity != profile_a.footprint)
     || (profile_b.vicinity != profile_b.footprint);
-  if (profile_a.extra_footprint_count != 0 || profile_b.extra_footprint_count != 0)
-    test_complement = true;
 
   if (output_conflicts)
     output_conflicts->clear();
@@ -721,8 +731,8 @@ rmf_utils::optional<rmf_traffic::Time> detect_invasion(
     if (overlap(bound_a.footprint, bound_b.vicinity))
     {
       if (const auto collision = check_collision(
-          profile_a, motion_a,
-          *profile_b.vicinity, motion_b, request))
+          profile_a.footprint, motion_a,
+          profile_b.vicinity, motion_b, request))
       {
         const auto time = compute_time(*collision, start_time, finish_time);
         if (!output_conflicts)
@@ -736,8 +746,8 @@ rmf_utils::optional<rmf_traffic::Time> detect_invasion(
     if (test_complement && overlap(bound_a.vicinity, bound_b.footprint))
     {
       if (const auto collision = check_collision(
-          profile_b, motion_b,
-          *profile_a.vicinity, motion_a, request))
+          profile_b.footprint, motion_b,
+          profile_a.vicinity, motion_a, request))
       {
         const auto time = compute_time(*collision, start_time, finish_time);
         if (!output_conflicts)
@@ -931,7 +941,7 @@ rmf_utils::optional<rmf_traffic::Time> DetectConflict::Implementation::between(
 
   // Return early if there is no geometry in the profiles
   // TODO(MXG): Should this produce an exception? Is this an okay scenario?
-  if (!profile_a.footprint && !profile_b.footprint)
+  if (profile_a.footprint.empty() && profile_b.footprint.empty())
     return rmf_utils::nullopt;
 
   // Return early if either profile is missing both a vicinity and a footprint.
@@ -939,7 +949,7 @@ rmf_utils::optional<rmf_traffic::Time> DetectConflict::Implementation::between(
   // value as the footprint when the vicinity has a nullptr value, checking if
   // a vicinity doesn't exist is the same as checking that both the vicinity and
   // footprint doesn't exist.
-  if (!profile_a.vicinity || !profile_b.vicinity)
+  if (profile_a.vicinity.empty() || profile_b.vicinity.empty())
     return rmf_utils::nullopt;
 
   // Return early if there is no time overlap between the trajectories
@@ -1000,7 +1010,7 @@ bool detect_conflicts(
 #endif // NDEBUG
 
   const auto vicinity = profile.vicinity();
-  if (!vicinity)
+  if (vicinity.empty())
     return false;
 
   const Time trajectory_start_time = *trajectory.start_time();
@@ -1034,16 +1044,19 @@ bool detect_conflicts(
     make_uninitialized_fcl_spline_motion();
   std::shared_ptr<internal::StaticMotion> motion_region =
     std::make_shared<internal::StaticMotion>(region.pose);
-
+    
   const FclContinuousCollisionRequest request = make_fcl_request();
 
-#ifdef RMF_TRAFFIC__USING_FCL_0_6
-  const std::shared_ptr<fcl::CollisionGeometryd> vicinity_geom =
-    geometry::FinalConvexShape::Implementation::get_collision(*vicinity);
-#else
-  const std::shared_ptr<fcl::CollisionGeometry> vicinity_geom =
-    geometry::FinalConvexShape::Implementation::get_collision(*vicinity);
-#endif
+  bool has_offset = false;
+  for (auto vincinity_shape : vicinity)
+  {
+    //vincinity_shape->get_characteristic_length
+    if (vincinity_shape->has_offset())
+    {
+      has_offset = true;
+      break;
+    }
+  }
 
   if (output_conflicts)
     output_conflicts->clear();
@@ -1059,46 +1072,113 @@ bool detect_conflicts(
 
     *motion_trajectory = spline_trajectory.to_fcl(
       spline_start_time, spline_finish_time);
-#ifdef RMF_TRAFFIC__USING_FCL_0_6
-    const auto obj_trajectory = fcl::ContinuousCollisionObjectd(
-      vicinity_geom, motion_trajectory);
-#else
-    const auto obj_trajectory = fcl::ContinuousCollisionObject(
-      vicinity_geom, motion_trajectory);
-#endif
 
-    assert(region.shape);
-    const auto& region_shapes = geometry::FinalShape::Implementation
-      ::get_collisions(*region.shape);
-    for (const auto& region_shape : region_shapes)
+    if (!has_offset)
     {
-#ifdef RMF_TRAFFIC__USING_FCL_0_6
-      const auto obj_region = fcl::ContinuousCollisionObjectd(
-        region_shape, motion_region);
-#else
-      const auto obj_region = fcl::ContinuousCollisionObject(
-        region_shape, motion_region);
-#endif
-
-      // TODO(MXG): We should do a broadphase test here before using
-      // fcl::collide
-
-      FclContinuousCollisionResult result;
-      fcl::collide(&obj_trajectory, &obj_region, request, result);
-      if (result.is_collide)
+      for (auto vicinity_shape : vicinity)
       {
-        if (!output_conflicts)
-          return true;
+        const auto obj_trajectory = fcl::ContinuousCollisionObject(
+          geometry::FinalConvexShape::Implementation::get_collision(*vicinity_shape), motion_trajectory);
 
-        output_conflicts->emplace_back(
-          DetectConflict::Implementation::Conflict{
-            it, it,
-            compute_time(
-              result.time_of_contact,
-              spline_start_time,
-              spline_finish_time)
-          });
+        assert(region.shape);
+        const auto& region_shapes = geometry::FinalShape::Implementation
+          ::get_collisions(*region.shape);
+        for (const auto& region_shape : region_shapes)
+        {
+#ifdef RMF_TRAFFIC__USING_FCL_0_6
+          const auto obj_region = fcl::ContinuousCollisionObjectd(
+            region_shape, motion_region);
+#else
+          const auto obj_region = fcl::ContinuousCollisionObject(
+            region_shape, motion_region);
+#endif
+      
+          // TODO(MXG): We should do a broadphase test here before using
+          // fcl::collide
+
+          FclContinuousCollisionResult result;
+          fcl::collide(&obj_trajectory, &obj_region, request, result);
+          if (result.is_collide)
+          {
+            if (!output_conflicts)
+              return true;
+
+            output_conflicts->emplace_back(
+              DetectConflict::Implementation::Conflict{
+                it, it,
+                compute_time(
+                  result.time_of_contact,
+                  spline_start_time,
+                  spline_finish_time)
+              });
+          }
+        }
       }
+    }
+    else
+    {
+      std::vector<ModelSpaceShape> vicinity_shapes;
+      
+      auto toModelSpaceShape = [](const geometry::ConstFinalConvexShapeGroup& shapes,
+        std::vector<ModelSpaceShape>& out)
+      {
+        for (auto shape : shapes)
+        {
+          FclTransform3 tx;
+          tx.setIdentity();
+          
+  #ifdef RMF_TRAFFIC__USING_FCL_0_6
+          tx.pretranslate(shape->get_offset());
+  #else
+          fcl::Vec3f p(shape->get_offset().x(), shape->get_offset().y(), 0.0f);
+          tx.setTranslation(p);
+  #endif
+          out.emplace_back(tx, shape->get_characteristic_length());
+        }
+      };
+      
+      toModelSpaceShape(vicinity, vicinity_shapes);
+      printf("todo: wait for generic version of collision function\n");
+      //@todo: wait for generic version of collision function
+/*
+      Eigen::Vector3d zero(0,0,0);
+      auto static_motion = rmf_traffic::to_fcl(zero, zero, zero, zero);
+
+      assert(region.shape);
+      const auto& region_shapes = geometry::FinalShape::Implementation
+        ::get_collisions(*region.shape);
+      for (const auto& region_shape : region_shapes)
+      { 
+        std::vector<ModelSpaceShape> region_shapes;
+        FclTransform3 tx;
+        tx.setIdentity();
+        region_shapes.emplace_back(tx, region.shape->get_characteristic_length());
+
+        double impact_time = 0.0;
+        double tolerance = 0.1;
+        uint dist_checks = 0;
+        const uint max_dist_checks = 120;
+        bool collide = collide_seperable_circles(*motion_trajectory, static_motion, vicinity_shapes, region.pose, 
+          impact_time, dist_checks, max_dist_checks, tolerance);
+
+        // std::cout << "dist_checks " << dist_checks << std::endl;
+        if (collide)
+        {
+          if (!output_conflicts)
+              return true;
+
+          output_conflicts->emplace_back(
+            DetectConflict::Implementation::Conflict{
+              it, it,
+              compute_time(
+                impact_time,
+                spline_start_time,
+                spline_finish_time)
+            });
+        }
+        
+      }
+      */
     }
   }
 

@@ -28,6 +28,8 @@
 #endif
 
 #include <vector>
+#include <rmf_utils/optional.hpp>
+#include <Eigen/Dense>
 
 namespace rmf_traffic {
 namespace geometry {
@@ -63,6 +65,8 @@ public:
 
   double _characteristic_length;
 
+  rmf_utils::optional<Eigen::Vector2d> _offset;
+
   static const CollisionGeometries& get_collisions(const FinalShape& shape)
   {
     return shape._pimpl->_collisions;
@@ -77,10 +81,25 @@ public:
     result._pimpl = rmf_utils::make_impl<Implementation>(
       Implementation{std::move(shape),
         std::move(collisions),
-        std::move(characteristic_length)});
+        std::move(characteristic_length),
+        std::nullopt});
     return result;
   }
 
+  static FinalShape make_final_shape_with_offset(
+    rmf_utils::impl_ptr<const Shape> shape,
+    CollisionGeometries collisions,
+    double characteristic_length,
+    Eigen::Vector2d offset)
+  {
+    FinalShape result;
+    result._pimpl = rmf_utils::make_impl<Implementation>(
+      Implementation{std::move(shape),
+        std::move(collisions),
+        std::move(characteristic_length),
+        offset});
+    return result;
+  }
 };
 
 //==============================================================================
@@ -102,7 +121,23 @@ public:
     result._pimpl = rmf_utils::make_impl<FinalShape::Implementation>(
       FinalShape::Implementation{std::move(shape),
         std::move(collisions),
-        characteristic_length});
+        characteristic_length,
+        std::nullopt});
+    return result;
+  }
+
+  static FinalConvexShape make_final_shape_with_offset(
+    rmf_utils::impl_ptr<const Shape> shape,
+    CollisionGeometries collisions,
+    double characteristic_length,
+    Eigen::Vector2d offset)
+  {
+    FinalConvexShape result;
+    result._pimpl = rmf_utils::make_impl<FinalShape::Implementation>(
+      FinalShape::Implementation{std::move(shape),
+        std::move(collisions),
+        characteristic_length,
+        offset});
     return result;
   }
 };

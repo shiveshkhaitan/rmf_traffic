@@ -45,34 +45,44 @@ public:
     geometry::ConstFinalConvexShapePtr footprint,
     geometry::ConstFinalConvexShapePtr vicinity = nullptr);
 
-  /// Add an extra shape to the footprint of the participant.
-  /// The onus is on the user to update the vicinity of the robot
+  /// Constructor for collections of shapes
   ///
-  /// \param[in] shape
-  ///   An estimate of the space that this extra shape occupies.
+  /// \param[in] footprint
+  ///   A collection of shapes that represent the space that this participant occupies.
   ///
-  /// \param[in] offset
-  ///   Offset to the additional shape, in the robot's coordinate frame
+  /// \param[in] vicinity
+  ///   A collection of shapes that represent an estimate of the vicinity around
+  ///   the participant in which the presence of other traffic would disrupt its
+  ///   operations. If a nullptr is used for this, the footprint shape will
+  ///   be used as the vicinity.
   ///
-  void add_extra_footprint(geometry::ConstFinalConvexShapePtr shape, Eigen::Vector3d offset);
-
-  /// Get the number of extra footprint shapes
-  uint extra_footprint_count() const;
-
-  /// Removes all extra footprint shapes
-  void clear_extra_footprints();
+  Profile(
+    geometry::ConstFinalConvexShapeGroup footprint,
+    geometry::ConstFinalConvexShapeGroup vicinity = geometry::ConstFinalConvexShapeGroup());
 
   /// Set the footprint of the participant.
   Profile& footprint(geometry::ConstFinalConvexShapePtr shape);
 
-  /// Get the footprint of the participant.
-  const geometry::ConstFinalConvexShapePtr& footprint() const;
+  /// Set the footprint group of the participant.
+  Profile& footprint(geometry::ConstFinalConvexShapeGroup shape);
 
-  /// Set the vicinity of this participant.
+  /// Get the footprint of the participant.
+  const geometry::ConstFinalConvexShapeGroup& footprint() const;
+
+  /// Get the footprint characteristic length
+  double get_footprint_characteristic_length() const;
+
+  /// Set the footprint of the participant.
   Profile& vicinity(geometry::ConstFinalConvexShapePtr shape);
 
+  /// Set the vicinity group of this participant.
+  Profile& vicinity(geometry::ConstFinalConvexShapeGroup shape);
+
   /// Get the vicinity of this participant.
-  const geometry::ConstFinalConvexShapePtr& vicinity() const;
+  const geometry::ConstFinalConvexShapeGroup& vicinity() const;
+
+  /// Get the footprint characteristic length
+  double get_vicinity_characteristic_length() const;
 
   class Implementation;
 private:

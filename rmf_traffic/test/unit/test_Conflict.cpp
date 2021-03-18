@@ -539,14 +539,15 @@ SCENARIO("DetectConflict unit tests")
 
     const auto circle_shape = rmf_traffic::geometry::make_final_convex<
       rmf_traffic::geometry::Circle>(0.5);
-    const auto circle_shape_ex = rmf_traffic::geometry::make_final_convex<
-      rmf_traffic::geometry::Circle>(0.6);
+    const auto circle_shape_ex = rmf_traffic::geometry::make_final_convex_with_offset<
+      rmf_traffic::geometry::Circle>(Eigen::Vector2d(0, -1), 0.6);
 
     rmf_traffic::Profile profile_circle { circle_shape };
 
-    rmf_traffic::Profile profile_circle_with_circle_offset { circle_shape };
-    profile_circle_with_circle_offset.add_extra_footprint(
-      circle_shape_ex, Eigen::Vector3d(0, -1.0, 0));
+    rmf_traffic::geometry::ConstFinalConvexShapeGroup grp_b;
+    grp_b.emplace_back(circle_shape);
+    grp_b.emplace_back(circle_shape_ex);
+    rmf_traffic::Profile profile_circle_with_circle_offset { grp_b };
 
     const rmf_traffic::Time time = std::chrono::steady_clock::now();
     Eigen::Vector3d pos = Eigen::Vector3d(0, 0, 0);
@@ -637,13 +638,15 @@ SCENARIO("DetectConflict unit tests")
       rmf_traffic::geometry::Box>(1.0, 1.f);
     const auto circle_shape = rmf_traffic::geometry::make_final_convex<
       rmf_traffic::geometry::Circle>(0.5);
-    const auto circle_shape_ex = rmf_traffic::geometry::make_final_convex<
-      rmf_traffic::geometry::Circle>(0.6);
+    const auto circle_shape_ex = rmf_traffic::geometry::make_final_convex_with_offset<
+      rmf_traffic::geometry::Circle>(Eigen::Vector2d(0, -1), 0.6);
 
     rmf_traffic::Profile profile_a { circle_shape };
 
-    rmf_traffic::Profile profile_b { circle_shape };
-    profile_b.add_extra_footprint(circle_shape_ex, Eigen::Vector3d(0, -1, 0));
+    rmf_traffic::geometry::ConstFinalConvexShapeGroup grp_b;
+    grp_b.emplace_back(circle_shape);
+    grp_b.emplace_back(circle_shape_ex);
+    rmf_traffic::Profile profile_b { grp_b };
 
     const rmf_traffic::Time time = std::chrono::steady_clock::now();
     rmf_traffic::Trajectory t1;
@@ -664,14 +667,22 @@ SCENARIO("DetectConflict unit tests")
       rmf_traffic::geometry::Box>(1.0, 1.f);
     const auto circle_shape = rmf_traffic::geometry::make_final_convex<
       rmf_traffic::geometry::Circle>(0.5);
-    const auto circle_shape_ex = rmf_traffic::geometry::make_final_convex<
-      rmf_traffic::geometry::Circle>(0.6);
+    const auto circle_shape_ex1 = rmf_traffic::geometry::make_final_convex_with_offset<
+      rmf_traffic::geometry::Circle>(Eigen::Vector2d(0, 1), 0.6);
+    const auto circle_shape_ex2 = rmf_traffic::geometry::make_final_convex_with_offset<
+      rmf_traffic::geometry::Circle>(Eigen::Vector2d(0, -1), 0.6);
 
-    rmf_traffic::Profile profile_a { circle_shape };
-    profile_a.add_extra_footprint(circle_shape_ex, Eigen::Vector3d(0, 1, 0));
+    rmf_traffic::geometry::ConstFinalConvexShapeGroup empty_grp;
 
-    rmf_traffic::Profile profile_b { circle_shape };
-    profile_b.add_extra_footprint(circle_shape_ex, Eigen::Vector3d(0, -1, 0));
+    rmf_traffic::geometry::ConstFinalConvexShapeGroup grp_a;
+    grp_a.emplace_back(circle_shape);
+    grp_a.emplace_back(circle_shape_ex1);
+    rmf_traffic::Profile profile_a { grp_a, empty_grp };
+
+    rmf_traffic::geometry::ConstFinalConvexShapeGroup grp_b;
+    grp_b.emplace_back(circle_shape);
+    grp_b.emplace_back(circle_shape_ex1);
+    rmf_traffic::Profile profile_b(grp_b, empty_grp);
 
     const rmf_traffic::Time time = std::chrono::steady_clock::now();
     rmf_traffic::Trajectory t1;

@@ -60,6 +60,22 @@ double FinalShape::get_characteristic_length() const
 }
 
 //==============================================================================
+Eigen::Vector2d FinalShape::get_offset() const
+{
+  if (_pimpl->_offset.has_value())
+    return *_pimpl->_offset;
+  return Eigen::Vector2d { 0, 0 };
+}
+
+//==============================================================================
+bool FinalShape::has_offset() const
+{
+  if (_pimpl->_offset)
+    return true;
+  return false;
+}
+
+//==============================================================================
 FinalShape::FinalShape()
 {
   // Do nothing. The _pimpl will be constructed by
