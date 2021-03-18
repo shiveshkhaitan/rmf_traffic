@@ -111,8 +111,8 @@ class DistanceDifferential
 public:
 
   DistanceDifferential(
-      const Spline& spline_a,
-      const Spline& spline_b);
+    const Spline& spline_a,
+    const Spline& spline_b);
 
   bool initially_approaching() const;
 
